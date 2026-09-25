@@ -1,0 +1,98 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vault-postgres
+    environment:
+      POSTGRES_USER: vault
+      POSTGRES_PASSWORD: vault_secret
+      POSTGRES_DB: vault_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U vault -d vault_db']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vault-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: vault-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vault-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: vault-backend
+    environment:
+      PORT: 4000
+      NODE_ENV: development
+      DATABASE_URL: postgresql://vault:vault_secret@postgres:5432/vault_db?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: vault_super_secret_jwt_key_2024
+      JWT_EXPIRY: 24h
+      STORAGE_BASE_PATH: /app/storage_data
+      REPLICATION_FACTOR: 3
+      MAX_FILE_SIZE: 104857600
+      CORS_ORIGIN: http://localhost:3000
+      HEALTH_CHECK_INTERVAL: 10000
+      REPAIR_INTERVAL: 30000
+      REBALANCE_INTERVAL: 60000
+    ports:
+      - '4000:4000'
+    volumes:
+      - storage_data:/app/storage_data
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vault-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: vault-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:4000
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/lib:/app/lib
+      - ./frontend/hooks:/app/hooks
+    depends_on:
+      - backend
+    networks:
+      - vault-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  storage_data:
+
+networks:
+  vault-network:
+    driver: bridge
